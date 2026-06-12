@@ -1,9 +1,6 @@
-export {
-  Logger,
-  ScopedLogger,
-  applyPipelineScope,
-  applyReportScope,
-} from "./Logger";
-export type { LogImportance, LoggerMessageI, PipelineCtxI, ScopeLikeI } from "./Logger";
+export { Logger, ScopedLogger } from "./Logger";
+export { applyPipelineScope, applyReportScope } from "./sentryScopes";
+export type { LogImportance, LoggerMessageI, PipelineCtxI, ScopeLikeI } from "./types";
 export { fireAndForget } from "./fireAndForget";
 export { safeStringify } from "./safeStringify";
+export { describeError } from "./describeError";

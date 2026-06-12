@@ -1,12 +1,15 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.safeStringify = exports.fireAndForget = exports.applyReportScope = exports.applyPipelineScope = exports.ScopedLogger = exports.Logger = void 0;
+exports.describeError = exports.safeStringify = exports.fireAndForget = exports.applyReportScope = exports.applyPipelineScope = exports.ScopedLogger = exports.Logger = void 0;
 var Logger_1 = require("./Logger");
 Object.defineProperty(exports, "Logger", { enumerable: true, get: function () { return Logger_1.Logger; } });
 Object.defineProperty(exports, "ScopedLogger", { enumerable: true, get: function () { return Logger_1.ScopedLogger; } });
-Object.defineProperty(exports, "applyPipelineScope", { enumerable: true, get: function () { return Logger_1.applyPipelineScope; } });
-Object.defineProperty(exports, "applyReportScope", { enumerable: true, get: function () { return Logger_1.applyReportScope; } });
+var sentryScopes_1 = require("./sentryScopes");
+Object.defineProperty(exports, "applyPipelineScope", { enumerable: true, get: function () { return sentryScopes_1.applyPipelineScope; } });
+Object.defineProperty(exports, "applyReportScope", { enumerable: true, get: function () { return sentryScopes_1.applyReportScope; } });
 var fireAndForget_1 = require("./fireAndForget");
 Object.defineProperty(exports, "fireAndForget", { enumerable: true, get: function () { return fireAndForget_1.fireAndForget; } });
 var safeStringify_1 = require("./safeStringify");
 Object.defineProperty(exports, "safeStringify", { enumerable: true, get: function () { return safeStringify_1.safeStringify; } });
+var describeError_1 = require("./describeError");
+Object.defineProperty(exports, "describeError", { enumerable: true, get: function () { return describeError_1.describeError; } });

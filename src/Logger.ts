@@ -1,5 +1,8 @@
 import * as Sentry from "@sentry/node";
-import { safeStringify } from "./safeStringify";
+import { LogImportance, LoggerMessageI, PipelineCtxI, ScopeLikeI } from "./types";
+import { describeError } from "./describeError";
+import { applyPipelineScope, applyReportScope } from "./sentryScopes";
+import { writeToTerminal } from "./terminal";
 
 /*
 Vocabulario público (lo único que usa el código de aplicación):
@@ -13,75 +16,11 @@ Vocabulario público (lo único que usa el código de aplicación):
 CRITICAL/IMPORTANT son internos: los decide la política del consumidor (en el
 boundary HTTP vía Logger.httpError), nunca el call site. Sentry es el único
 destino remoto; el host decide cuándo está habilitado (instrument.ts).
+
+Los estáticos privados log/capture/breadcrumb/terminalLogger son el contrato
+de espionaje de setupLoggerMock (./testing): renombrarlos rompe las suites
+de los consumidores.
 */
-
-export type LogImportance = "CRITICAL" | "IMPORTANT" | "INFO" | "DEBUG";
-
-export interface LoggerMessageI {
-  hospitalId?: string;
-  userId?: string;
-  title: string;
-  description?: string;
-  stack?: string;
-  extra?: unknown;
-  // ámbito derivado (clase/módulo de origen): viaja como tag indexable `scope`
-  scope?: string;
-}
-
-export interface PipelineCtxI {
-  // vocabulario del consumidor (ej. en OCA: "appointment" | "prescription" | ...)
-  module: string;
-  channel: string;
-  type?: string;
-  hospitalId?: string;
-  notificationId?: string;
-  sendTo?: string;
-  patientName?: string;
-  payload?: Record<string, any>;
-}
-
-const describeError = (error: unknown): { base?: Error; text: string } => {
-  const base = error instanceof Error ? error : undefined;
-  return { base, text: base?.message ?? String(error) };
-};
-
-export interface ScopeLikeI {
-  setTag(key: string, value: string): unknown;
-  setContext(key: string, value: Record<string, any>): unknown;
-  setUser(user: { id: string }): unknown;
-  setExtra(key: string, value: unknown): unknown;
-}
-
-// Los apply*Scope están separados de report/reportPipeline para poder testear
-// los tags exactos (hospital.id, scope, module, channel) sin mockear el SDK:
-// una regresión acá rompe dashboards/alerts sin que falle ningún otro test.
-export const applyPipelineScope = (scope: ScopeLikeI, ctx: PipelineCtxI): void => {
-  scope.setTag("module", ctx.module);
-  scope.setTag("channel", ctx.channel);
-  if (ctx.type) scope.setTag("notification_type", ctx.type);
-  if (ctx.hospitalId) scope.setTag("hospital.id", ctx.hospitalId);
-
-  scope.setContext("notification", {
-    id: ctx.notificationId,
-    hospitalId: ctx.hospitalId,
-    type: ctx.type,
-    channel: ctx.channel,
-    sendTo: ctx.sendTo,
-    patientName: ctx.patientName,
-  });
-  if (ctx.payload) scope.setContext("payload", ctx.payload);
-  if (ctx.hospitalId) scope.setUser({ id: ctx.hospitalId });
-};
-
-export const applyReportScope = (scope: ScopeLikeI, message: LoggerMessageI): void => {
-  if (message.hospitalId) scope.setTag("hospital.id", message.hospitalId);
-  if (message.scope) scope.setTag("scope", message.scope);
-
-  scope.setExtra("title", message.title);
-  if (message.userId) scope.setExtra("userId", message.userId);
-  if (message.description) scope.setExtra("description", message.description);
-  if (message.extra) scope.setExtra("extra", safeStringify(message.extra));
-};
 
 // Logger con ámbito (patrón logger-per-class): el nombre del use case sale
 // solo de constructor.name — nadie tipea prefijos a mano. El título queda
@@ -89,10 +28,6 @@ export const applyReportScope = (scope: ScopeLikeI, message: LoggerMessageI): vo
 // detalle variable va en description/extra) y `scope` viaja como tag.
 export class ScopedLogger {
   constructor(private readonly name: string) {}
-
-  private message(event: string, ctx: Partial<LoggerMessageI>): LoggerMessageI {
-    return { ...ctx, scope: this.name, title: `${this.name}: ${event}` };
-  }
 
   info(event: string, ctx: Partial<LoggerMessageI> = {}): void {
     Logger.info(this.message(event, ctx));
@@ -103,16 +38,12 @@ export class ScopedLogger {
   }
 
   report(error: unknown, ctx: Partial<LoggerMessageI> = {}): void {
-    // describeError puede tirar con un valor envenenado (toString/getter):
-    // el título se deriva bajo el mismo paraguas que protege al caller —
-    // este método vive en .catch handlers igual que Logger.report.
-    let event: string;
-    try {
-      event = ctx.title ?? describeError(error).text;
-    } catch {
-      event = "error";
-    }
+    const event = ctx.title ?? describeError(error).text;
     Logger.report(error, this.message(event, ctx));
+  }
+
+  private message(event: string, ctx: Partial<LoggerMessageI>): LoggerMessageI {
+    return { ...ctx, scope: this.name, title: `${this.name}: ${event}` };
   }
 }
 
@@ -171,14 +102,16 @@ export class Logger {
     });
   }
 
-  // ——— interno / boundaries ———
+  // ——— boundary HTTP ———
 
-  // Solo para el errorHandler HTTP: el nivel sale de la política del host
-  // (ej. ServerError.isSignal), nunca de un literal en el call site. No
-  // captura — eso ya lo hizo setupExpressErrorHandler.
+  // Solo para el errorHandler del host: el nivel sale de su política (ej.
+  // ServerError.isSignal), nunca de un literal en el call site. No captura —
+  // eso ya lo hizo setupExpressErrorHandler.
   static httpError(message: LoggerMessageI, isSignal: boolean): void {
     Logger.log(message, isSignal ? "CRITICAL" : "IMPORTANT");
   }
+
+  // ——— internos (contrato de spies — ver doc de cabecera) ———
 
   // Único punto de la librería que llama Sentry.captureException fuera del
   // boundary HTTP.
@@ -190,8 +123,8 @@ export class Logger {
   }
 
   // report()/reportPipeline() viven dentro de .catch: si la telemetría lanzara
-  // (toString envenenado, falla del SDK), sería unhandled rejection y bajaría
-  // el proceso. La telemetría nunca puede voltear al caller.
+  // (falla del SDK, scope corrupto), sería unhandled rejection y bajaría el
+  // proceso. La telemetría nunca puede voltear al caller.
   private static safely(operation: string, original: unknown, fn: () => void): void {
     try {
       fn();
@@ -223,51 +156,7 @@ export class Logger {
     });
   }
 
-  private static terminalLogger(importance: LogImportance, message: LoggerMessageI) {
-    const colorCode = Logger.getColorCode(importance);
-    const formatedMessage = Logger.formatMessage(message, importance);
-    const resetColor = "\x1b[37m";
-    switch (importance) {
-      case "CRITICAL":
-        console.error(`${colorCode}${formatedMessage}${resetColor}`);
-        break;
-      case "IMPORTANT":
-        console.warn(`${colorCode}${formatedMessage}${resetColor}`);
-        break;
-      case "INFO":
-        console.info(`${colorCode}${formatedMessage}${resetColor}`);
-        break;
-      case "DEBUG":
-      default:
-        console.log(`${colorCode}${formatedMessage}${resetColor}`);
-        break;
-    }
+  private static terminalLogger(importance: LogImportance, message: LoggerMessageI): void {
+    writeToTerminal(importance, message);
   }
-
-  private static getColorCode = (importance: LogImportance = "DEBUG") => {
-    if (importance === "DEBUG") {
-      return "\x1b[33m"; // yellow for DEBUG
-    } else if (importance === "IMPORTANT") {
-      return "\x1b[38;5;208m"; // orange for IMPORTANT
-    } else if (importance === "CRITICAL") {
-      return "\x1b[31m\x1b[1m"; // red and bold for CRITICAL
-    } else if (importance === "INFO") {
-      return "\x1b[36m"; // cyan for INFO
-    }
-    return "\x1b[37m"; // default color is white
-  };
-
-  private static formatMessage = (message: LoggerMessageI, importance: LogImportance = "DEBUG") => {
-    const headerParts: string[] = [`[${importance}] ${message.title || "No Title"}`];
-    if (message.hospitalId) headerParts.push(`HospitalId: ${message.hospitalId}`);
-    if (message.userId) headerParts.push(`UserId: ${message.userId}`);
-    headerParts.push(`ENV: ${process.env.NODE_ENV}`);
-    headerParts.push(new Date().toISOString());
-
-    const lines: string[] = [headerParts.join(" | ")];
-    if (message.description) lines.push(`  description: ${message.description}`);
-    if (message.extra) lines.push(`  extra: ${safeStringify(message.extra)}`);
-    if (message.stack) lines.push(`  stack: ${message.stack}`);
-    return lines.join("\n");
-  };
 }

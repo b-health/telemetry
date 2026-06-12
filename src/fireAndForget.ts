@@ -1,4 +1,5 @@
-import { Logger, LoggerMessageI } from "./Logger";
+import { Logger } from "./Logger";
+import { LoggerMessageI } from "./types";
 
 // Boundary para tareas fire-and-forget: una promesa no awaiteada queda fuera
 // del request — sin este catch su error no llega a ningún handler ni a Sentry.

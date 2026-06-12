@@ -1,4 +1,5 @@
-import { Logger, applyReportScope, applyPipelineScope } from "./Logger";
+import { Logger } from "./Logger";
+import { applyReportScope, applyPipelineScope } from "./sentryScopes";
 
 const spyCapture = () => jest.spyOn(Logger as any, "capture").mockImplementation(() => {});
 const spyLog = () => jest.spyOn(Logger as any, "log").mockImplementation(() => {});
