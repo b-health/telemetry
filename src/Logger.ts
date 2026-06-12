@@ -1,17 +1,21 @@
 import * as Sentry from "@sentry/node";
-import { LogImportance, LoggerMessageI, PipelineCtxI, ScopeLikeI } from "./types";
+import { LogImportance, LoggerMessageI, ReportDimsI, ScopeLikeI } from "./types";
 import { describeError } from "./describeError";
-import { applyPipelineScope, applyReportScope } from "./sentryScopes";
+import { applyDims, applyReportScope } from "./sentryScopes";
 import { writeToTerminal } from "./terminal";
 
 /*
 Public vocabulary (the ONLY thing application code uses):
-  Logger.info(msg)              → breadcrumb + console (developer context)
-  Logger.debug(msg)             → console (development/testing noise)
-  Logger.report(error, ctx)     → caught an error and moving on: ALWAYS an issue
-  Logger.reportPipeline(e, ctx) → notification delivery failure: issue + channel tags
-  Logger.scope(this | "name")   → same vocabulary with an auto-derived scope
-  throw                         → captured by the host's HTTP boundary
+  Logger.info(msg)                    → breadcrumb + console (developer context)
+  Logger.debug(msg)                   → console (development/testing noise)
+  Logger.report(error, ctx)           → caught an error and moving on: ALWAYS an issue
+  Logger.reportTagged(e, dims, ctx)   → same, with consumer-defined searchable dimensions
+  Logger.scope(this | "name")         → same vocabulary with an auto-derived scope
+  throw                               → captured by the host's HTTP boundary
+
+Domain-specific failure families (e.g. OCA's notification pipeline) are NOT
+library API: each consumer defines a typed facade over reportTagged with its
+own required dimensions. The library ships mechanism, consumers own vocabulary.
 
 CRITICAL/IMPORTANT are internal: the policy decides them (in the HTTP boundary
 via Logger.httpError), never the call site. Sentry is the only remote
@@ -158,60 +162,43 @@ export class Logger {
    * }
    */
   static report(error: unknown, ctx: Partial<LoggerMessageI> = {}): void {
-    Logger.safely("report", error, () => {
+    Logger.reportTagged(error, {}, ctx);
+  }
+
+  /**
+   * {@link Logger.report} plus consumer-defined searchable dimensions.
+   *
+   * This is the extension point for domain failure families: services define
+   * a TYPED facade with their required dimensions and translate it into
+   * generic `dims`. The library guarantees the mechanism (always captures,
+   * never throws, base tags applied); the facade guarantees the vocabulary.
+   *
+   * @param error - The caught value.
+   * @param dims - Searchable tags / readable contexts / Sentry user.
+   * @param ctx - Optional base context (same contract as `report`).
+   *
+   * @example
+   * // a consumer facade (e.g. OCA's notification pipeline):
+   * export const reportPipeline = (error: unknown, ctx: PipelineCtxI): void =>
+   *   Logger.reportTagged(error, {
+   *     tags: { module: ctx.module, channel: ctx.channel },
+   *     contexts: { notification: { id: ctx.notificationId } },
+   *     user: ctx.hospitalId ? { id: ctx.hospitalId } : undefined,
+   *   }, { hospitalId: ctx.hospitalId, title: `[${ctx.module}] ${ctx.channel} channel error` });
+   */
+  static reportTagged(error: unknown, dims: ReportDimsI, ctx: Partial<LoggerMessageI> = {}): void {
+    Logger.safely("reportTagged", error, () => {
       const { base, text } = describeError(error);
       const message: LoggerMessageI = {
         ...ctx,
         title: ctx.title ?? text,
         stack: ctx.stack ?? base?.stack,
       };
-      Logger.capture(error, (scope) => applyReportScope(scope, message));
+      Logger.capture(error, (scope) => {
+        applyReportScope(scope, message);
+        applyDims(scope, dims);
+      });
       Logger.log(message, "CRITICAL");
-    });
-  }
-
-  /**
-   * THE capture for notification-delivery failures (WhatsApp/email/SMS).
-   *
-   * Differs from {@link Logger.report} in its context contract: the type
-   * system REQUIRES `module` and `channel`, which become the Sentry tags
-   * that dashboards and alert rules slice by ("are WhatsApp reminders
-   * failing for hospital 5?"). A patient left unnotified is never expected
-   * behavior — this always captures. Never throws.
-   *
-   * Do NOT add a `Logger.log`/`Logger.info` next to this call: it already
-   * writes the terminal line.
-   *
-   * @param error - The caught value from the send attempt.
-   * @param ctx - Channel dimensions (required) + notification pointers.
-   *
-   * @example
-   * } catch (error) {
-   *   Logger.reportPipeline(error, {
-   *     module: "appointment",
-   *     channel: "WHATSAPP",
-   *     type: notification.type,
-   *     hospitalId: notification.hospitalId,
-   *     notificationId: notification.id,
-   *   });
-   *   notification.setStatusWithObservations("ERROR", error.message);
-   * }
-   */
-  static reportPipeline(error: unknown, ctx: PipelineCtxI): void {
-    Logger.safely("reportPipeline", error, () => {
-      Logger.capture(error, (scope) => applyPipelineScope(scope, ctx));
-
-      const { base, text } = describeError(error);
-      Logger.log(
-        {
-          title: `[${ctx.module}] ${ctx.channel} channel error`,
-          hospitalId: ctx.hospitalId,
-          description: text,
-          stack: base?.stack,
-          extra: ctx.notificationId ? `notificationId: ${ctx.notificationId}` : undefined,
-        },
-        "CRITICAL"
-      );
     });
   }
 
@@ -247,7 +234,7 @@ export class Logger {
   }
 
   /**
-   * Telemetry must never take the caller down: report()/reportPipeline() live
+   * Telemetry must never take the caller down: report()/reportTagged() live
    * inside `.catch` handlers, where a secondary throw (SDK failure, corrupt
    * scope) would become an unhandled rejection and kill the process.
    */

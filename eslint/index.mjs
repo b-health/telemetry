@@ -36,7 +36,7 @@ export const telemetryGuard = ({
             {
               group: ["@sentry/*"],
               message:
-                "Sentry directo solo en la capa de telemetría. Para reportar errores usá Logger.report() / Logger.reportPipeline() o fireAndForget().",
+                "Sentry directo solo en la capa de telemetría. Para reportar errores usá Logger.report() / Logger.reportTagged() (o la facade de tu servicio) o fireAndForget().",
             },
           ],
         },

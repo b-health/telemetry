@@ -1,5 +1,5 @@
 import { Logger } from "./Logger";
-import { applyReportScope, applyPipelineScope } from "./sentryScopes";
+import { applyReportScope, applyDims } from "./sentryScopes";
 
 const spyCapture = () => jest.spyOn(Logger as any, "capture").mockImplementation(() => {});
 const spyLog = () => jest.spyOn(Logger as any, "log").mockImplementation(() => {});
@@ -94,56 +94,62 @@ describe("applyReportScope()", () => {
   });
 });
 
-describe("applyPipelineScope()", () => {
+describe("applyDims()", () => {
   const fakeScope = () => ({ setTag: jest.fn(), setContext: jest.fn(), setUser: jest.fn(), setExtra: jest.fn() });
 
-  it("tags module/channel/notification_type/hospital.id and sets contexts + user", () => {
+  it("applies tags, contexts and user", () => {
     const scope = fakeScope();
-    applyPipelineScope(scope, {
-      module: "appointment",
-      channel: "WHATSAPP",
-      type: "REMINDER",
-      hospitalId: "5",
-      notificationId: "n1",
-      sendTo: "+549351...",
-      payload: { code: "abc" },
+    applyDims(scope, {
+      tags: { module: "appointment", channel: "WHATSAPP" },
+      contexts: { notification: { id: "n1" } },
+      user: { id: "5" },
     });
 
     expect(scope.setTag).toHaveBeenCalledWith("module", "appointment");
     expect(scope.setTag).toHaveBeenCalledWith("channel", "WHATSAPP");
-    expect(scope.setTag).toHaveBeenCalledWith("notification_type", "REMINDER");
-    expect(scope.setTag).toHaveBeenCalledWith("hospital.id", "5");
+    expect(scope.setContext).toHaveBeenCalledWith("notification", { id: "n1" });
     expect(scope.setUser).toHaveBeenCalledWith({ id: "5" });
-    expect(scope.setContext).toHaveBeenCalledWith("notification", expect.objectContaining({ id: "n1" }));
-    expect(scope.setContext).toHaveBeenCalledWith("payload", { code: "abc" });
   });
 
-  it("skips optional tags/user when ctx is minimal", () => {
+  it("skips undefined tags/contexts and missing user — facades pass optionals straight through", () => {
     const scope = fakeScope();
-    applyPipelineScope(scope, { module: "prescription", channel: "EMAIL" });
+    applyDims(scope, {
+      tags: { module: "prescription", notification_type: undefined },
+      contexts: { payload: undefined },
+    });
     expect(scope.setTag).toHaveBeenCalledWith("module", "prescription");
-    expect(scope.setTag).toHaveBeenCalledWith("channel", "EMAIL");
-    expect(scope.setTag).not.toHaveBeenCalledWith("hospital.id", expect.anything());
+    expect(scope.setTag).not.toHaveBeenCalledWith("notification_type", expect.anything());
+    expect(scope.setContext).not.toHaveBeenCalled();
     expect(scope.setUser).not.toHaveBeenCalled();
   });
 });
 
-describe("Logger.reportPipeline()", () => {
-  it("always logs CRITICAL with channel context", () => {
+describe("Logger.reportTagged()", () => {
+  it("captures with base scope + dims and logs CRITICAL with the given title", () => {
     const captureSpy = spyCapture();
     const logSpy = spyLog();
     const error = new Error("send failed");
-    Logger.reportPipeline(error, { module: "appointment", channel: "WHATSAPP", hospitalId: "5", notificationId: "n1" });
+    Logger.reportTagged(
+      error,
+      { tags: { module: "appointment", channel: "WHATSAPP" } },
+      { hospitalId: "5", title: "[appointment] WHATSAPP channel error" }
+    );
     expect(captureSpy).toHaveBeenCalledWith(error, expect.any(Function));
     expect(logSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "[appointment] WHATSAPP channel error",
         hospitalId: "5",
-        description: "send failed",
-        extra: "notificationId: n1",
+        stack: error.stack,
       }),
       "CRITICAL"
     );
+  });
+
+  it("report() delegates to reportTagged with empty dims (single capture path)", () => {
+    const captureSpy = spyCapture();
+    spyLog();
+    Logger.report(new Error("boom"));
+    expect(captureSpy).toHaveBeenCalledTimes(1);
   });
 });
 
