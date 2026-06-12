@@ -22,7 +22,7 @@ Cuando estás escribiendo código y pasa algo, te hacés **una sola pregunta**:
 |---|---|---|
 | No lo puedo manejar | `throw` | El boundary HTTP del host lo captura y responde |
 | Lo manejo/trago y sigo | `Logger.report(error, ctx)` | **Siempre** un issue en Sentry + log |
-| Falló un envío de notificación | `Logger.reportPipeline(error, ctx)` | Issue con tags de canal (`module`/`channel`) |
+| Falló algo de TU dominio con dimensiones propias | la facade de tu servicio (ej. `reportPipeline` en oca) → `Logger.reportTagged` | Issue con tags de tu dominio |
 | Pasó algo que da contexto | `Logger.info(msg)` | Breadcrumb (viaja pegado al próximo issue) + consola |
 | Ruido de desarrollo | `Logger.debug(msg)` | Solo consola, jamás Sentry |
 | Disparo una promesa sin await | `fireAndForget(promise, ctx)` | Si rechaza → issue; si no, nada |
@@ -36,7 +36,7 @@ No existe "elegir el nivel": `CRITICAL`/`IMPORTANT` los decide la política inte
 ## Los tres destinos en Sentry (y cómo se relacionan)
 
 ```
-ISSUES        ← lo que hay que ARREGLAR (report/reportPipeline/throw)
+ISSUES        ← lo que hay que ARREGLAR (report/reportTagged/throw)
                 agrupado por título estable, filtrable por tags
 SENTRY LOGS   ← lo que PASÓ (console.warn/error vía consoleLoggingIntegration del host)
 BREADCRUMBS   ← cómo LLEGÓ acá (los info() del mismo request, adjuntos al issue)
@@ -80,20 +80,25 @@ El scope sale de `constructor.name` — nadie tipea prefijos, imposible escribir
 }
 ```
 
-### Fallo de envío de notificación
+### Familias de fallos con dimensiones propias: el patrón facade
+
+La lib NO conoce tu dominio. Cuando una familia de errores necesita tags propios
+(ej. fallos de envío en oca, fallos de HIS sync en api), tu servicio define una
+facade tipada sobre `reportTagged` — el type system de TU repo exige TUS dimensiones:
 
 ```ts
-} catch (error) {
-  Logger.reportPipeline(error, {
-    module: "appointment",      // ← requerido por tipo: sin dimensiones no compila
-    channel: "WHATSAPP",
-    hospitalId: notification.hospitalId,
-    notificationId: notification.id,
-  });
-  notification.setStatusWithObservations("ERROR", error.message);
-}
-// NO agregues Logger.log/info al lado: reportPipeline ya escribe la línea de terminal.
+// oca/src/Common/domain/reportPipeline.ts — el vocabulario es del consumidor
+export const reportPipeline = (error: unknown, ctx: PipelineCtxI): void =>
+  Logger.reportTagged(error, {
+    tags: { module: ctx.module, channel: ctx.channel, "notification_type": ctx.type },
+    contexts: { notification: { id: ctx.notificationId, sendTo: ctx.sendTo } },
+    user: ctx.hospitalId ? { id: ctx.hospitalId } : undefined,
+  }, { hospitalId: ctx.hospitalId, title: `[${ctx.module}] ${ctx.channel} channel error` });
 ```
+
+La garantía de "ningún fallo sin dimensiones" no se pierde: la enforcea el tipo
+de la facade, que vive donde vive el dominio. La lib garantiza el mecanismo
+(siempre issue, nunca lanza, tags base aplicados).
 
 ### Promesa sin await
 
@@ -108,7 +113,7 @@ fireAndForget(new SyncWorkflowUC(repo).execute(id, hospitalId), {
 
 ### Garantía transversal: la telemetría jamás voltea al caller
 
-`report()`/`reportPipeline()` están autoprotegidos: un `toString` envenenado o una falla del SDK dentro de un `.catch` no se convierte en unhandled rejection. Lo peor que puede pasar es un `console.error` de fallback.
+`report()`/`reportTagged()` están autoprotegidos: un `toString` envenenado o una falla del SDK dentro de un `.catch` no se convierte en unhandled rejection. Lo peor que puede pasar es un `console.error` de fallback.
 
 ## Arquitectura: qué es de la lib y qué es del host
 
@@ -130,13 +135,13 @@ Decisiones de diseño que conviene conocer:
 
 - **`@sentry/node` es peer dependency.** La lib no conoce el DSN ni puede inicializar Sentry: emite contra el SDK que el host configuró. Host = dueño del vendor; lib = dueña del vocabulario. Si algún día se cambia de vendor, el radio de impacto es un archivo de esta lib — los call sites no se enteran.
 - **La clasificación esperado/señal es del host** (ej. `ServerError.isSignal`), por eso `httpError()` recibe el booleano en vez de conocer la jerarquía de errores de cada servicio.
-- **Ningún consumidor importa `@sentry/*`** — regla de lint. La única puerta a Issues fuera de `throw` es `report()`/`reportPipeline()`.
+- **Ningún consumidor importa `@sentry/*`** — regla de lint. La única puerta a Issues fuera de `throw` es `report()`/`reportTagged()` (y las facades que lo envuelven).
 
 ## Integración en un servicio nuevo
 
 ```jsonc
 // 1. package.json
-"dependencies": { "@b-health/telemetry": "github:b-health/telemetry#v1.0.5" }
+"dependencies": { "@b-health/telemetry": "github:b-health/telemetry#v2.0.0" }
 ```
 
 ```ts

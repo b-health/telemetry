@@ -35,10 +35,10 @@ describe("Logger.capture → Sentry SDK", () => {
     expect(SentryMock.captureException).toHaveBeenCalledWith(error);
   });
 
-  it("reportPipeline() also goes through the same capture path", () => {
+  it("reportTagged() also goes through the same capture path", () => {
     const { SentryMock, Logger } = freshLoggerWithSentryMock();
     const error = new Error("send failed");
-    Logger.reportPipeline(error, { module: "appointment", channel: "WHATSAPP" });
+    Logger.reportTagged(error, { tags: { module: "appointment", channel: "WHATSAPP" } });
     expect(SentryMock.captureException).toHaveBeenCalledWith(error);
   });
 });

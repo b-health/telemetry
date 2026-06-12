@@ -1,4 +1,4 @@
-import { LoggerMessageI, PipelineCtxI } from "./types";
+import { LoggerMessageI, ReportDimsI } from "./types";
 /**
  * Logger bound to a named scope (logger-per-class pattern).
  *
@@ -111,33 +111,27 @@ export declare class Logger {
      */
     static report(error: unknown, ctx?: Partial<LoggerMessageI>): void;
     /**
-     * THE capture for notification-delivery failures (WhatsApp/email/SMS).
+     * {@link Logger.report} plus consumer-defined searchable dimensions.
      *
-     * Differs from {@link Logger.report} in its context contract: the type
-     * system REQUIRES `module` and `channel`, which become the Sentry tags
-     * that dashboards and alert rules slice by ("are WhatsApp reminders
-     * failing for hospital 5?"). A patient left unnotified is never expected
-     * behavior — this always captures. Never throws.
+     * This is the extension point for domain failure families: services define
+     * a TYPED facade with their required dimensions and translate it into
+     * generic `dims`. The library guarantees the mechanism (always captures,
+     * never throws, base tags applied); the facade guarantees the vocabulary.
      *
-     * Do NOT add a `Logger.log`/`Logger.info` next to this call: it already
-     * writes the terminal line.
-     *
-     * @param error - The caught value from the send attempt.
-     * @param ctx - Channel dimensions (required) + notification pointers.
+     * @param error - The caught value.
+     * @param dims - Searchable tags / readable contexts / Sentry user.
+     * @param ctx - Optional base context (same contract as `report`).
      *
      * @example
-     * } catch (error) {
-     *   Logger.reportPipeline(error, {
-     *     module: "appointment",
-     *     channel: "WHATSAPP",
-     *     type: notification.type,
-     *     hospitalId: notification.hospitalId,
-     *     notificationId: notification.id,
-     *   });
-     *   notification.setStatusWithObservations("ERROR", error.message);
-     * }
+     * // a consumer facade (e.g. OCA's notification pipeline):
+     * export const reportPipeline = (error: unknown, ctx: PipelineCtxI): void =>
+     *   Logger.reportTagged(error, {
+     *     tags: { module: ctx.module, channel: ctx.channel },
+     *     contexts: { notification: { id: ctx.notificationId } },
+     *     user: ctx.hospitalId ? { id: ctx.hospitalId } : undefined,
+     *   }, { hospitalId: ctx.hospitalId, title: `[${ctx.module}] ${ctx.channel} channel error` });
      */
-    static reportPipeline(error: unknown, ctx: PipelineCtxI): void;
+    static reportTagged(error: unknown, dims: ReportDimsI, ctx?: Partial<LoggerMessageI>): void;
     /**
      * For the host's Express error handler ONLY — not application code.
      *
@@ -157,7 +151,7 @@ export declare class Logger {
     /** Single point in the library that calls `Sentry.captureException` outside the HTTP boundary. */
     private static capture;
     /**
-     * Telemetry must never take the caller down: report()/reportPipeline() live
+     * Telemetry must never take the caller down: report()/reportTagged() live
      * inside `.catch` handlers, where a secondary throw (SDK failure, corrupt
      * scope) would become an unhandled rejection and kill the process.
      */

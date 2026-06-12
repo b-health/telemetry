@@ -1,13 +1,13 @@
-import { LoggerMessageI, PipelineCtxI, ScopeLikeI } from "./types";
+import { LoggerMessageI, ReportDimsI, ScopeLikeI } from "./types";
 import { safeStringify } from "./safeStringify";
 
-// Kept separate from report/reportPipeline so the EXACT tag keys
-// (hospital.id, scope, module, channel) can be tested with a plain fake scope
-// — no SDK mocking. A regression here breaks Sentry dashboards/alerts without
+// Kept separate from report/reportTagged so the EXACT tag keys
+// (hospital.id, scope) can be tested with a plain fake scope — no SDK
+// mocking. A regression here breaks Sentry dashboards/alerts without
 // failing any other test.
 
 /**
- * Applies the tags/extras contract of {@link Logger.report} to a Sentry scope.
+ * Applies the base tags/extras contract of every report to a Sentry scope.
  *
  * Tags (searchable): `hospital.id`, `scope`.
  * Extras (readable): `title`, `userId`, `description`, `extra` (safe-serialized).
@@ -26,30 +26,20 @@ export const applyReportScope = (scope: ScopeLikeI, message: LoggerMessageI): vo
 };
 
 /**
- * Applies the tags/contexts contract of {@link Logger.reportPipeline} to a
- * Sentry scope.
+ * Applies consumer-defined dimensions ({@link ReportDimsI}) to a Sentry scope.
  *
- * Tags (searchable): `module`, `channel`, `notification_type`, `hospital.id`.
- * Contexts (readable): `notification` (id, destination, patient), `payload`.
- * Also sets the Sentry user to the hospital for per-tenant grouping.
+ * `undefined` tag/context values are skipped, so facades can pass optional
+ * fields straight through without filtering.
  *
  * @param scope - A Sentry scope (or a structural fake in tests).
- * @param ctx - The pipeline failure context.
+ * @param dims - The consumer facade's dimensions.
  */
-export const applyPipelineScope = (scope: ScopeLikeI, ctx: PipelineCtxI): void => {
-  scope.setTag("module", ctx.module);
-  scope.setTag("channel", ctx.channel);
-  if (ctx.type) scope.setTag("notification_type", ctx.type);
-  if (ctx.hospitalId) scope.setTag("hospital.id", ctx.hospitalId);
-
-  scope.setContext("notification", {
-    id: ctx.notificationId,
-    hospitalId: ctx.hospitalId,
-    type: ctx.type,
-    channel: ctx.channel,
-    sendTo: ctx.sendTo,
-    patientName: ctx.patientName,
-  });
-  if (ctx.payload) scope.setContext("payload", ctx.payload);
-  if (ctx.hospitalId) scope.setUser({ id: ctx.hospitalId });
+export const applyDims = (scope: ScopeLikeI, dims: ReportDimsI): void => {
+  for (const [key, value] of Object.entries(dims.tags ?? {})) {
+    if (value !== undefined) scope.setTag(key, value);
+  }
+  for (const [key, value] of Object.entries(dims.contexts ?? {})) {
+    if (value !== undefined) scope.setContext(key, value);
+  }
+  if (dims.user) scope.setUser(dims.user);
 };

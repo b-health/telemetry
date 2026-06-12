@@ -5,6 +5,10 @@ export type LogImportance = "CRITICAL" | "IMPORTANT" | "INFO" | "DEBUG";
  *
  * Searchable dimensions (`hospitalId`, `scope`) become Sentry tags on capture;
  * everything else travels as extras/console output.
+ *
+ * `hospitalId` is deliberately first-class: hospital multi-tenancy is
+ * platform-wide ubiquitous language at B.Health (every service has it),
+ * unlike service-level vocabulary which belongs in consumer facades.
  */
 export interface LoggerMessageI {
     /** Tenant identifier. Becomes the indexable `hospital.id` Sentry tag — include it whenever available. */
@@ -27,35 +31,28 @@ export interface LoggerMessageI {
     scope?: string;
 }
 /**
- * Context for notification-pipeline failures (`Logger.reportPipeline`).
+ * Custom searchable dimensions for {@link Logger.reportTagged}.
  *
- * `module` and `channel` are REQUIRED by design: they become the Sentry tags
- * that dashboards and alert rules slice by — the type system guarantees no
- * pipeline error ships without its dimensions.
+ * This is the polymorphic mechanism behind consumer facades: each service
+ * defines its own typed facade (e.g. OCA's `reportPipeline` with required
+ * `module`/`channel`) and translates it into these generic dimensions. The
+ * library ships the mechanism; the consumer owns the vocabulary.
  */
-export interface PipelineCtxI {
-    /** Consumer vocabulary (e.g. in OCA: `"appointment" | "prescription" | ...`). Becomes the `module` tag. */
-    module: string;
-    /** Delivery channel (e.g. `"WHATSAPP" | "EMAIL" | "SMS"`). Becomes the `channel` tag. */
-    channel: string;
-    /** Notification type (e.g. `"REMINDER"`). Becomes the `notification_type` tag when present. */
-    type?: string;
-    /** Tenant identifier. Becomes the `hospital.id` tag and the Sentry user. */
-    hospitalId?: string;
-    /** Notification row id — the pointer back to the consumer's database. */
-    notificationId?: string;
-    /** Destination address (phone/email). Travels in the `notification` context, not as a tag. */
-    sendTo?: string;
-    /** Patient display name. Travels in the `notification` context. */
-    patientName?: string;
-    /** Full notification payload, attached as a Sentry context for debugging. */
-    payload?: Record<string, any>;
+export interface ReportDimsI {
+    /** Indexable Sentry tags. `undefined` values are skipped. */
+    tags?: Record<string, string | undefined>;
+    /** Readable Sentry contexts (shown on the issue, not searchable). `undefined` values are skipped. */
+    contexts?: Record<string, Record<string, any> | undefined>;
+    /** Sentry user for per-actor grouping (e.g. the tenant). */
+    user?: {
+        id: string;
+    };
 }
 /**
  * Minimal structural view of a Sentry scope.
  *
- * Lets `applyReportScope`/`applyPipelineScope` be tested with a plain fake —
- * no SDK mocking required.
+ * Lets the `apply*Scope` helpers be tested with a plain fake — no SDK
+ * mocking required.
  */
 export interface ScopeLikeI {
     setTag(key: string, value: string): unknown;
