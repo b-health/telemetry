@@ -1,6 +1,6 @@
 {
   "name": "@b-health/telemetry",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Telemetría B.Health: Logger de 4 verbos sobre Sentry (info/debug/report/throw) + reportPipeline, scope(), fireAndForget y guardia de ESLint",
   "repository": "github:b-health/telemetry",
   "license": "MIT",
