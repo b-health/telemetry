@@ -1,5 +1,14 @@
-// Serialización para telemetría: el valor puede ser cualquier cosa (body de un
-// request, objeto circular, getter envenenado) y quien loguea nunca debe caerse.
+/**
+ * Defensive serialization for telemetry payloads.
+ *
+ * The input can be anything (request bodies, circular objects, poisoned
+ * getters) and the caller is always a logging path that must never throw.
+ *
+ * @param value - Any value to render as a string.
+ * @returns `""` for `undefined`, the value itself when it is already a string,
+ *   its JSON form when serializable, `String(value)` as fallback, and
+ *   `"[unserializable]"` when everything else fails.
+ */
 export const safeStringify = (value: unknown): string => {
   if (value === undefined) return "";
   if (typeof value === "string") return value;
