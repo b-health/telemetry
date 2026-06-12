@@ -21,6 +21,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # historial completo para git describe / log desde el último tag
+          # push vía deploy key: master está protegido (ruleset master-protection)
+          # y las deploy keys tienen bypass — el GITHUB_TOKEN no lo tiene.
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - uses: actions/setup-node@v4
         with:
