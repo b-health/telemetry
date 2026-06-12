@@ -39,36 +39,70 @@ const describeError_1 = require("./describeError");
 const sentryScopes_1 = require("./sentryScopes");
 const terminal_1 = require("./terminal");
 /*
-Vocabulario público (lo único que usa el código de aplicación):
-  Logger.info(msg)              → breadcrumb + consola (contexto para developers)
-  Logger.debug(msg)             → consola (info de desarrollo/testing)
-  Logger.report(error, ctx)     → atrapaste un error y seguís: SIEMPRE issue
-  Logger.reportPipeline(e, ctx) → fallo de envío de notificación: siempre issue
-  Logger.scope(this | "nombre") → mismo vocabulario con scope derivado automático
-  throw                         → lo captura el boundary HTTP (setupExpressErrorHandler)
+Public vocabulary (the ONLY thing application code uses):
+  Logger.info(msg)              → breadcrumb + console (developer context)
+  Logger.debug(msg)             → console (development/testing noise)
+  Logger.report(error, ctx)     → caught an error and moving on: ALWAYS an issue
+  Logger.reportPipeline(e, ctx) → notification delivery failure: issue + channel tags
+  Logger.scope(this | "name")   → same vocabulary with an auto-derived scope
+  throw                         → captured by the host's HTTP boundary
 
-CRITICAL/IMPORTANT son internos: los decide la política del consumidor (en el
-boundary HTTP vía Logger.httpError), nunca el call site. Sentry es el único
-destino remoto; el host decide cuándo está habilitado (instrument.ts).
+CRITICAL/IMPORTANT are internal: the policy decides them (in the HTTP boundary
+via Logger.httpError), never the call site. Sentry is the only remote
+destination; the host owns the SDK init and decides when it is enabled.
 
-Los estáticos privados log/capture/breadcrumb/terminalLogger son el contrato
-de espionaje de setupLoggerMock (./testing): renombrarlos rompe las suites
-de los consumidores.
+The private statics log/capture/breadcrumb/terminalLogger are the spying
+contract of setupLoggerMock (./testing): renaming them breaks consumer suites.
 */
-// Logger con ámbito (patrón logger-per-class): el nombre del use case sale
-// solo de constructor.name — nadie tipea prefijos a mano. El título queda
-// "<Scope>: <evento>" (evento corto y estable = fingerprinting limpio; el
-// detalle variable va en description/extra) y `scope` viaja como tag.
+/**
+ * Logger bound to a named scope (logger-per-class pattern).
+ *
+ * Created via {@link Logger.scope}. Every entry gets the title
+ * `"<Scope>: <event>"` and the indexable `scope` Sentry tag — nobody types
+ * prefixes by hand. Keep `event` short and stable (clean fingerprinting);
+ * variable data belongs in `description`/`extra`.
+ */
 class ScopedLogger {
     constructor(name) {
         this.name = name;
     }
+    /**
+     * Records developer context: a Sentry breadcrumb plus a console line.
+     * Breadcrumbs attach automatically to any issue captured later in the same
+     * execution context — the timeline finds you, you don't search for it.
+     *
+     * @param event - Short, stable event name (e.g. `"dedup_skipped"`).
+     * @param ctx - Optional details (`description`, `hospitalId`, `extra`...).
+     *
+     * @example
+     * this.log.info("dedup_skipped", { description: event.messageId });
+     */
     info(event, ctx = {}) {
         Logger.info(this.message(event, ctx));
     }
+    /**
+     * Console-only output for development. Never reaches Sentry (no breadcrumb,
+     * no Logs) — safe to leave in code, invisible in production monitoring.
+     *
+     * @param event - Short event name.
+     * @param ctx - Optional details.
+     */
     debug(event, ctx = {}) {
         Logger.debug(this.message(event, ctx));
     }
+    /**
+     * Reports a swallowed error as a Sentry issue, prefixed with this scope.
+     * Same contract as {@link Logger.report}: ALWAYS captures, never throws.
+     *
+     * @param error - The caught value (Error, string, anything).
+     * @param ctx - Optional context. `ctx.title` overrides the event name
+     *   derived from the error message.
+     *
+     * @example
+     * } catch (err) {
+     *   this.log.report(err, { hospitalId, extra: `agentId: ${id}` });
+     * }
+     */
     report(error, ctx = {}) {
         const event = ctx.title ?? (0, describeError_1.describeError)(error).text;
         Logger.report(error, this.message(event, ctx));
@@ -79,20 +113,75 @@ class ScopedLogger {
 }
 exports.ScopedLogger = ScopedLogger;
 class Logger {
-    // ——— vocabulario público ———
+    // ——— public vocabulary ———
+    /**
+     * Creates a {@link ScopedLogger} with an auto-derived name.
+     *
+     * Pass `this` from a class (the name comes from `constructor.name` — never
+     * typed by hand, impossible to misspell) or a string for module-level use.
+     * The scope prefixes every title and becomes the indexable `scope` tag.
+     *
+     * @param source - A class instance (`this`) or an explicit scope name.
+     * @returns A logger that stamps this scope on every entry.
+     *
+     * @example
+     * class HandleInboundMessageUC {
+     *   private readonly log = Logger.scope(this); // → "HandleInboundMessageUC"
+     * }
+     *
+     * @example
+     * const log = Logger.scope("hisSync.macena"); // module without a class
+     */
     static scope(source) {
         return new ScopedLogger(typeof source === "string" ? source : source?.constructor?.name || "UnknownScope");
     }
+    /**
+     * Records developer context: a Sentry breadcrumb plus a console line.
+     *
+     * Use for business decisions worth seeing in an issue's timeline
+     * ("reminder skipped because the appointment passed"). Costs nothing when
+     * nothing fails: the breadcrumb buffer dies with the request.
+     *
+     * @param message - Structured entry. Keep `title` short and stable.
+     *
+     * @example
+     * Logger.info({ title: "[sendOnDemand] Sending WhatsApp", description: `sendTo=${sendTo}` });
+     */
     static info(message) {
         Logger.log(message, "INFO");
     }
+    /**
+     * Console-only output for development. Never reaches Sentry.
+     *
+     * @param message - Structured entry.
+     */
     static debug(message) {
         Logger.log(message, "DEBUG");
     }
-    // Única puerta a Issues fuera de throw, para errores atrapados sin rethrow
-    // (background, webhooks, compensaciones): la captura automática nunca los ve.
-    // Captura SIEMPRE: "esperado" modela un usuario recibiendo un 4xx, y en
-    // estos contextos no hay usuario — un error tragado sin issue es invisible.
+    /**
+     * THE single gate to Sentry issues outside `throw` — for errors caught
+     * WITHOUT rethrow (background tasks, webhook handlers, compensations),
+     * which automatic capture never sees.
+     *
+     * ALWAYS captures: "expected error" models a user receiving a 4xx, and in
+     * these contexts there is no user — a swallowed error without an issue is
+     * invisible. Never throws (self-protected): safe inside any `.catch`.
+     *
+     * Rule of thumb: if you `throw`, do NOT call this (the HTTP boundary
+     * captures); if you swallow, ALWAYS call this.
+     *
+     * @param error - The caught value. Captured as-is so Sentry keeps the
+     *   original stack. When no Error is at hand, synthesize one with a STABLE
+     *   message: `Logger.report(new Error("no_hospital_mapping"), { description })`.
+     * @param ctx - Optional context. `hospitalId` becomes the `hospital.id`
+     *   tag; `title` overrides the error message as issue title.
+     *
+     * @example
+     * } catch (error) {
+     *   Logger.report(error, { title: "[submitTemplate] rollback failed", hospitalId });
+     *   return null; // flow continues — but the failure now exists in Sentry
+     * }
+     */
     static report(error, ctx = {}) {
         Logger.safely("report", error, () => {
             const { base, text } = (0, describeError_1.describeError)(error);
@@ -105,9 +194,33 @@ class Logger {
             Logger.log(message, "CRITICAL");
         });
     }
-    // LA captura del pipeline de notificaciones. Acá no aplica "esperado": un
-    // paciente sin notificación nunca es comportamiento esperado. Lleva tags
-    // indexables de canal que report() no modela.
+    /**
+     * THE capture for notification-delivery failures (WhatsApp/email/SMS).
+     *
+     * Differs from {@link Logger.report} in its context contract: the type
+     * system REQUIRES `module` and `channel`, which become the Sentry tags
+     * that dashboards and alert rules slice by ("are WhatsApp reminders
+     * failing for hospital 5?"). A patient left unnotified is never expected
+     * behavior — this always captures. Never throws.
+     *
+     * Do NOT add a `Logger.log`/`Logger.info` next to this call: it already
+     * writes the terminal line.
+     *
+     * @param error - The caught value from the send attempt.
+     * @param ctx - Channel dimensions (required) + notification pointers.
+     *
+     * @example
+     * } catch (error) {
+     *   Logger.reportPipeline(error, {
+     *     module: "appointment",
+     *     channel: "WHATSAPP",
+     *     type: notification.type,
+     *     hospitalId: notification.hospitalId,
+     *     notificationId: notification.id,
+     *   });
+     *   notification.setStatusWithObservations("ERROR", error.message);
+     * }
+     */
     static reportPipeline(error, ctx) {
         Logger.safely("reportPipeline", error, () => {
             Logger.capture(error, (scope) => (0, sentryScopes_1.applyPipelineScope)(scope, ctx));
@@ -121,25 +234,38 @@ class Logger {
             }, "CRITICAL");
         });
     }
-    // ——— boundary HTTP ———
-    // Solo para el errorHandler del host: el nivel sale de su política (ej.
-    // ServerError.isSignal), nunca de un literal en el call site. No captura —
-    // eso ya lo hizo setupExpressErrorHandler.
+    // ——— HTTP boundary ———
+    /**
+     * For the host's Express error handler ONLY — not application code.
+     *
+     * Writes the log line for an HTTP error at the level decided by the host's
+     * policy (e.g. `ServerError.isSignal`). Does NOT capture: the host's
+     * `setupExpressErrorHandler` already did.
+     *
+     * @param message - Structured entry built by the error handler.
+     * @param isSignal - The host policy's verdict: `true` → CRITICAL,
+     *   `false` (expected business error) → IMPORTANT.
+     *
+     * @example
+     * // inside the host errorHandler middleware:
+     * Logger.httpError(loggerMessage, ServerError.isSignal(error));
+     */
     static httpError(message, isSignal) {
         Logger.log(message, isSignal ? "CRITICAL" : "IMPORTANT");
     }
-    // ——— internos (contrato de spies — ver doc de cabecera) ———
-    // Único punto de la librería que llama Sentry.captureException fuera del
-    // boundary HTTP.
+    // ——— internals (spy contract — see header doc) ———
+    /** Single point in the library that calls `Sentry.captureException` outside the HTTP boundary. */
     static capture(error, applyScope) {
         Sentry.withScope((scope) => {
             applyScope(scope);
             Sentry.captureException(error);
         });
     }
-    // report()/reportPipeline() viven dentro de .catch: si la telemetría lanzara
-    // (falla del SDK, scope corrupto), sería unhandled rejection y bajaría el
-    // proceso. La telemetría nunca puede voltear al caller.
+    /**
+     * Telemetry must never take the caller down: report()/reportPipeline() live
+     * inside `.catch` handlers, where a secondary throw (SDK failure, corrupt
+     * scope) would become an unhandled rejection and kill the process.
+     */
     static safely(operation, original, fn) {
         try {
             fn();
@@ -151,8 +277,10 @@ class Logger {
             catch { }
         }
     }
-    // Escritor puro: consola + Sentry Logs (via consoleLoggingIntegration) +
-    // breadcrumb para INFO. Nunca crea issues — eso es de report()/throw.
+    /**
+     * Pure writer: console + Sentry Logs (via consoleLoggingIntegration) +
+     * breadcrumb for INFO. Never creates issues — that is report()/throw.
+     */
     static log(message, importance = "DEBUG") {
         if (importance === "INFO")
             Logger.breadcrumb(message);
