@@ -11,6 +11,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
+
+      # dist/ va commiteado (consumidores instalan con --ignore-scripts): el
+      # dist del PR DEBE corresponder al src del PR — esto cierra la ventana
+      # de un dist manipulado que no matchea el código revisado.
+      - name: Verificar dist commiteado == dist rebuildeado
+        run: git diff --exit-code -- dist || (echo "::error::dist/ desactualizado — corré 'npm run build' y commiteá dist/" && exit 1)
+
       - run: npm test
+
+      # Smoke de la superficie publicada: exports map, shims node10 y preset.
+      - name: Smoke de package surface
+        run: |
+          node -e "require('./dist/index.js'); require('./testing.js'); console.log('CJS OK')"
+          node -e "import('./eslint/index.mjs').then(m => { if (typeof m.telemetryGuard !== 'function') throw new Error('preset roto'); console.log('ESM OK') })"
+          npm pack --dry-run 2>&1 | grep -q "dist/index.js" && npm pack --dry-run 2>&1 | grep -q "eslint/index.mjs" && echo "pack OK"

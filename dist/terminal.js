@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.writeToTerminal = exports.formatMessage = void 0;
 const safeStringify_1 = require("./safeStringify");
-const RESET = "\x1b[37m";
+const RESET = "\x1b[0m"; // reset real: limpia color Y bold (37m era "set white" y dejaba el bold de CRITICAL)
 const RENDER = {
     CRITICAL: { color: "\x1b[31m\x1b[1m", write: (line) => console.error(line) },
     IMPORTANT: { color: "\x1b[38;5;208m", write: (line) => console.warn(line) },

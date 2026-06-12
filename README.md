@@ -4,13 +4,13 @@ El vocabulario de telemetría de B.Health: una sola forma de loguear, reportar e
 
 ## Por qué existe
 
-Nació de una auditoría real (junio 2026): ~25.000 eventos de Sentry en 14 días, la mayoría ruido, y los errores graves **invisibles** — crons con catch vacío, promesas fire-and-forget muriendo en silencio, `console.error` que no llegaba a ningún lado, y dos servicios (api/oca) con copias "espejadas" del Logger que ya habían divergido.
+Tres problemas clásicos de telemetría en microservicios: ruido que entierra la señal, errores tragados que no llegan a ningún destino (catches sin rethrow, promesas fire-and-forget), y copias "espejadas" de utilidades de logging que divergen entre servicios.
 
 La librería resuelve las tres cosas a la vez:
 
 1. **Nada importante puede ser invisible** — todo error tragado tiene un camino obligatorio a Sentry.
 2. **Nada irrelevante crea ruido** — los niveles los decide la política, no el dev de turno.
-3. **El contrato no se degrada** — las reglas de lint viajan con el paquete; violarlo no compila la review.
+3. **El contrato no se degrada** — las reglas de lint viajan con el paquete (`severity: "error"` para enforcement duro; `"warn"` durante ventanas de migración).
 
 ## El modelo mental (esto es lo único que hay que internalizar)
 
@@ -87,13 +87,26 @@ La lib NO conoce tu dominio. Cuando una familia de errores necesita tags propios
 facade tipada sobre `reportTagged` — el type system de TU repo exige TUS dimensiones:
 
 ```ts
-// oca/src/Common/domain/reportPipeline.ts — el vocabulario es del consumidor
-export const reportPipeline = (error: unknown, ctx: PipelineCtxI): void =>
-  Logger.reportTagged(error, {
-    tags: { module: ctx.module, channel: ctx.channel, "notification_type": ctx.type },
-    contexts: { notification: { id: ctx.notificationId, sendTo: ctx.sendTo } },
-    user: ctx.hospitalId ? { id: ctx.hospitalId } : undefined,
-  }, { hospitalId: ctx.hospitalId, title: `[${ctx.module}] ${ctx.channel} channel error` });
+// <tu-servicio>/src/Common/domain/Logger.ts — el vocabulario es del consumidor.
+// Forma canónica: subclase (los estáticos se heredan — todo verbo futuro de la
+// lib aparece solo) + export explícito en el barrel que pisa al del star.
+import { Logger as TelemetryLogger } from "@b-health/telemetry";
+
+export class Logger extends TelemetryLogger {
+  static reportPipeline(error: unknown, ctx: PipelineCtxI): void {
+    Logger.reportTagged(error, {
+      tags: { module: ctx.module, channel: ctx.channel, notification_type: ctx.type },
+      contexts: { notification: { id: ctx.notificationId } },
+      user: ctx.hospitalId ? { id: ctx.hospitalId } : undefined,
+    }, { hospitalId: ctx.hospitalId, title: `[${ctx.module}] ${ctx.channel} channel error` });
+  }
+}
+```
+
+```ts
+// barrel del consumidor: el export explícito gana al `export *` de la lib
+export * from "@b-health/telemetry";
+export { Logger } from "./Logger";
 ```
 
 La garantía de "ningún fallo sin dimensiones" no se pierde: la enforcea el tipo
@@ -173,11 +186,11 @@ import { setupLoggerMock } from "@b-health/telemetry/testing";
 beforeEach(() => setupLoggerMock());
 ```
 
-Referencia de adopción completa: `oca` (PR b-health/oca#164-165). El contrato conceptual y sus porqués: `dev-wiki/wiki/patterns/telemetria_sentry.md` (repo interno).
+Referencia de adopción completa: el servicio `oca` (repo interno de B.Health) — su `Common/domain/Logger.ts` es la subclase canónica.
 
 ## Releases
 
-Automáticos en cada merge a master (`.github/workflows/release.yml`): tests → bump por conventional commits (`feat:`→minor, `!:`/`BREAKING CHANGE`→major, resto→patch) → **rebuild de `dist/`** → tag → GitHub Release. Master está protegido por ruleset: el check `test` es requerido para mergear; el bot de release pushea vía deploy key.
+Automáticos en cada merge a master (`.github/workflows/release.yml`): tests → bump por conventional commits (`feat:`→minor; `tipo!:` en el subject o `BREAKING CHANGE:` al inicio de línea en el body→major; resto→patch) → **rebuild de `dist/`** → tag → GitHub Release. Master está protegido por ruleset: el check `test` es requerido para mergear; el bot de release pushea vía deploy key.
 
 `dist/` va commiteado porque los consumidores instalan como **git dependency** y sus Docker builds usan `npm install --ignore-scripts` (`prepare` no corre). El workflow garantiza que el dist de cada tag corresponde a su source.
 

@@ -1,7 +1,7 @@
 import { LogImportance, LoggerMessageI } from "./types";
 import { safeStringify } from "./safeStringify";
 
-const RESET = "\x1b[37m";
+const RESET = "\x1b[0m"; // reset real: limpia color Y bold (37m era "set white" y dejaba el bold de CRITICAL)
 
 const RENDER: Record<LogImportance, { color: string; write: (line: string) => void }> = {
   CRITICAL: { color: "\x1b[31m\x1b[1m", write: (line) => console.error(line) },

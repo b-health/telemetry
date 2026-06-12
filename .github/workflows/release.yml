@@ -9,14 +9,22 @@ on:
   push:
     branches: [master]
 
+# Dos merges rápidos no pueden correr en paralelo: ambos calcularían la versión
+# desde el mismo tag base (riesgo de tag huérfano apuntando fuera de master).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    # el propio commit de release no debe re-disparar el workflow
-    if: "!startsWith(github.event.head_commit.message, 'release:')"
+    # El propio commit de release no debe re-disparar el workflow. Se gatea por
+    # AUTOR (no por el subject, que en un squash-merge lo controla el título
+    # del PR y permitiría suprimir el release/rebuild de dist a voluntad).
+    if: github.event.head_commit.author.email != 'github-actions[bot]@users.noreply.github.com'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,7 +37,10 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm ci
+      # --ignore-scripts: este job tiene cargada la deploy key (write + bypass)
+      # en el ssh-agent — los lifecycle scripts de dependencias no corren acá.
+      - run: npm ci --ignore-scripts
+      - run: npm run build
       - run: npm test
 
       - name: Calcular bump (conventional commits desde el último tag)
@@ -37,12 +48,15 @@ jobs:
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$LAST_TAG" ]; then RANGE=""; else RANGE="$LAST_TAG..HEAD"; fi
-          COMMITS=$(git log $RANGE --format=%s)
+          SUBJECTS=$(git log $RANGE --format=%s)
+          BODIES=$(git log $RANGE --format=%B)
           echo "Commits desde ${LAST_TAG:-el inicio}:"
-          echo "$COMMITS"
-          if echo "$COMMITS" | grep -qE "^[a-z]+(\(.+\))?!:|BREAKING CHANGE"; then
+          echo "$SUBJECTS"
+          # BREAKING CHANGE vive en el footer (body) según conventional commits;
+          # anclado a inicio de línea para no matchear menciones casuales.
+          if echo "$SUBJECTS" | grep -qE "^[a-z]+(\(.+\))?!:" || echo "$BODIES" | grep -qE "^BREAKING CHANGE:"; then
             BUMP=major
-          elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
+          elif echo "$SUBJECTS" | grep -qE "^feat(\(.+\))?:"; then
             BUMP=minor
           else
             BUMP=patch
@@ -50,7 +64,7 @@ jobs:
           echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
           echo "Bump: $BUMP"
 
-      - name: Versionar, rebuildeear dist y taggear
+      - name: Versionar, rebuildear dist y taggear
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -60,10 +74,16 @@ jobs:
           git add package.json package-lock.json dist
           git commit -m "release: v$VERSION [skip ci]"
           git tag "v$VERSION"
-          git push origin master "v$VERSION"
+          # --atomic: o entran branch y tag juntos, o ninguno (sin tags huérfanos)
+          git push --atomic origin master "v$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: GitHub Release
+      - name: GitHub Release (idempotente)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$VERSION" --generate-notes
+        run: |
+          if ! gh release view "v$VERSION" > /dev/null 2>&1; then
+            gh release create "v$VERSION" --generate-notes
+          else
+            echo "Release v$VERSION ya existe — nada que hacer."
+          fi
