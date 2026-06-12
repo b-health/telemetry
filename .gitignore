@@ -1,0 +1,3 @@
+# dist/ va COMMITEADO a propósito: los consumidores instalan como git-dependency
+# con --ignore-scripts (Docker), así que `prepare` no corre y dist debe existir.
+node_modules/
