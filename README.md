@@ -48,6 +48,8 @@ import { setupLoggerMock } from "@b-health/telemetry/testing";
 beforeEach(() => setupLoggerMock());
 ```
 
-## Nota de release: `dist/` va commiteado
+## Releases: automáticos al mergear a master
 
-Los consumidores instalan como **git dependency** y sus Docker builds usan `npm install --ignore-scripts`, así que `prepare` no corre en el install. Antes de taggear: `npm run build && git add dist`.
+CI/CD (`.github/workflows/release.yml`): cada merge a master corre los tests, calcula el bump por conventional commits (`feat:`→minor, `!:`/`BREAKING CHANGE`→major, resto→patch), **regenera `dist/`**, commitea, taggea y crea el GitHub Release. No hay ritual manual: solo mergear con mensajes conventional.
+
+`dist/` va commiteado porque los consumidores instalan como **git dependency** y sus Docker builds usan `npm install --ignore-scripts` (`prepare` no corre en el install). El workflow garantiza que el dist del tag siempre corresponde al source.

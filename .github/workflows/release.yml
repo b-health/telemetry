@@ -1,0 +1,66 @@
+name: Release
+
+# Cada merge a master publica una versión: corre tests, calcula el bump por
+# conventional commits desde el último tag, regenera dist/ (los consumidores
+# instalan como git-dep con --ignore-scripts, así que dist DEBE venir
+# commiteado en el tag), commitea, taggea y crea el GitHub Release.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # el propio commit de release no debe re-disparar el workflow
+    if: "!startsWith(github.event.head_commit.message, 'release:')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # historial completo para git describe / log desde el último tag
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Calcular bump (conventional commits desde el último tag)
+        id: bump
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then RANGE=""; else RANGE="$LAST_TAG..HEAD"; fi
+          COMMITS=$(git log $RANGE --format=%s)
+          echo "Commits desde ${LAST_TAG:-el inicio}:"
+          echo "$COMMITS"
+          if echo "$COMMITS" | grep -qE "^[a-z]+(\(.+\))?!:|BREAKING CHANGE"; then
+            BUMP=major
+          elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
+            BUMP=minor
+          else
+            BUMP=patch
+          fi
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "Bump: $BUMP"
+
+      - name: Versionar, rebuildeear dist y taggear
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version ${{ steps.bump.outputs.bump }} --no-git-tag-version
+          VERSION=$(node -p "require('./package.json').version")
+          npm run build
+          git add package.json package-lock.json dist
+          git commit -m "release: v$VERSION [skip ci]"
+          git tag "v$VERSION"
+          git push origin master --follow-tags
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" --generate-notes
