@@ -60,6 +60,25 @@ describe("Logger.report()", () => {
     expect(captureSpy).toHaveBeenCalledWith("string failure", expect.any(Function));
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "string failure" }), "CRITICAL");
   });
+
+  // La línea de log era el ÚNICO canal de diagnóstico con Sentry apagado, y un
+  // wrapper con mensaje fijo la dejaba sin causa (extra: null) — CU-86bbpejr6.
+  it("fills extra from the error's own diagnostics (extraInfo) when the caller passes none", () => {
+    const error = Object.assign(new Error("Failed to close conversation session"), {
+      extraInfo: { prismaCode: "P2025", cause: "Record to update not found" },
+    });
+    Logger.report(error, { hospitalId: "5" });
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ extra: { extraInfo: { prismaCode: "P2025", cause: "Record to update not found" } } }),
+      "CRITICAL"
+    );
+  });
+
+  it("caller extra wins over the error's diagnostics", () => {
+    const error = Object.assign(new Error("boom"), { extraInfo: { prismaCode: "P2025" } });
+    Logger.report(error, { extra: "notificationId: 42" });
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ extra: "notificationId: 42" }), "CRITICAL");
+  });
 });
 
 // Pin de los tags/extras: una regresión acá rompe la búsqueda por hospital.id /

@@ -1,3 +1,5 @@
+import { DiagnosableErrorI } from "./types";
+
 export interface DescribedErrorI {
   /** The original value when it was an `Error` instance. */
   base?: Error;
@@ -21,5 +23,38 @@ export const describeError = (error: unknown): DescribedErrorI => {
     return { base, text: base?.message ?? String(error) };
   } catch {
     return { text: "[undescribable error]" };
+  }
+};
+
+/**
+ * Extracts the diagnostic payload an error carries beyond message/name/stack.
+ *
+ * Wrapped errors are the norm at B.Health (`ServerError` with a fixed message
+ * per call site): the real cause travels INSIDE the object — `extraInfo`
+ * (provider response, Prisma code) and the standard `cause`. Serializing an
+ * Error by message/stack alone drops exactly that, which makes every DB
+ * failure indistinguishable in terminal/CloudWatch logs (Sentry gets the
+ * object; the log line did not).
+ *
+ * `extraInfo` wins over `cause` when both exist: wrappers that set `extraInfo`
+ * already embed a described cause in it — printing both would duplicate.
+ *
+ * Total function like {@link describeError}: NEVER throws.
+ *
+ * @param error - Any caught value.
+ * @returns A small structured object for the log line's `extra`, or
+ *   `undefined` when the error carries no diagnostics.
+ */
+export const errorDiagnostics = (error: unknown): Record<string, unknown> | undefined => {
+  try {
+    if (!(error instanceof Error)) return undefined;
+    // extraInfo comes from the DiagnosableErrorI contract (types.ts); cause is
+    // cast because it predates the lib's TS target (runtime since Node 16.9).
+    const { extraInfo, cause } = error as Error & DiagnosableErrorI & { cause?: unknown };
+    if (extraInfo !== undefined) return { extraInfo };
+    if (cause !== undefined) return { cause: describeError(cause).text };
+    return undefined;
+  } catch {
+    return undefined;
   }
 };
