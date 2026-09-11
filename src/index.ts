@@ -3,4 +3,4 @@ export { applyDims, applyReportScope } from "./sentryScopes";
 export type { LogImportance, LoggerMessageI, ReportDimsI, ScopeLikeI } from "./types";
 export { fireAndForget } from "./fireAndForget";
 export { safeStringify } from "./safeStringify";
-export { describeError } from "./describeError";
+export { describeError, errorDiagnostics } from "./describeError";

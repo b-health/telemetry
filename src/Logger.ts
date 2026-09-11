@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/node";
 import { LogImportance, LoggerMessageI, ReportDimsI, ScopeLikeI } from "./types";
-import { describeError } from "./describeError";
+import { describeError, errorDiagnostics } from "./describeError";
 import { applyDims, applyReportScope } from "./sentryScopes";
 import { writeToTerminal } from "./terminal";
 
@@ -193,6 +193,11 @@ export class Logger {
         ...ctx,
         title: ctx.title ?? text,
         stack: ctx.stack ?? base?.stack,
+        // Caller extra wins; otherwise surface what the error itself carries
+        // (extraInfo/cause) — without this the log line prints a fixed wrapper
+        // message and the actual cause dies unlogged (Sentry-off deployments
+        // have no other channel).
+        extra: ctx.extra ?? errorDiagnostics(error),
       };
       Logger.capture(error, (scope) => {
         applyReportScope(scope, message);

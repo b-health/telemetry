@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.describeError = exports.safeStringify = exports.fireAndForget = exports.applyReportScope = exports.applyDims = exports.ScopedLogger = exports.Logger = void 0;
+exports.errorDiagnostics = exports.describeError = exports.safeStringify = exports.fireAndForget = exports.applyReportScope = exports.applyDims = exports.ScopedLogger = exports.Logger = void 0;
 var Logger_1 = require("./Logger");
 Object.defineProperty(exports, "Logger", { enumerable: true, get: function () { return Logger_1.Logger; } });
 Object.defineProperty(exports, "ScopedLogger", { enumerable: true, get: function () { return Logger_1.ScopedLogger; } });
@@ -13,3 +13,4 @@ var safeStringify_1 = require("./safeStringify");
 Object.defineProperty(exports, "safeStringify", { enumerable: true, get: function () { return safeStringify_1.safeStringify; } });
 var describeError_1 = require("./describeError");
 Object.defineProperty(exports, "describeError", { enumerable: true, get: function () { return describeError_1.describeError; } });
+Object.defineProperty(exports, "errorDiagnostics", { enumerable: true, get: function () { return describeError_1.errorDiagnostics; } });

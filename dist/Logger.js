@@ -217,6 +217,11 @@ class Logger {
                 ...ctx,
                 title: ctx.title ?? text,
                 stack: ctx.stack ?? base?.stack,
+                // Caller extra wins; otherwise surface what the error itself carries
+                // (extraInfo/cause) — without this the log line prints a fixed wrapper
+                // message and the actual cause dies unlogged (Sentry-off deployments
+                // have no other channel).
+                extra: ctx.extra ?? (0, describeError_1.errorDiagnostics)(error),
             };
             Logger.capture(error, (scope) => {
                 (0, sentryScopes_1.applyReportScope)(scope, message);
