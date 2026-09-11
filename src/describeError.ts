@@ -1,3 +1,5 @@
+import { DiagnosableErrorI } from "./types";
+
 export interface DescribedErrorI {
   /** The original value when it was an `Error` instance. */
   base?: Error;
@@ -46,9 +48,9 @@ export const describeError = (error: unknown): DescribedErrorI => {
 export const errorDiagnostics = (error: unknown): Record<string, unknown> | undefined => {
   try {
     if (!(error instanceof Error)) return undefined;
-    // Structural cast: extraInfo is a B.Health wrapper convention, and cause
-    // predates the lib's TS lib target (it exists at runtime since Node 16.9).
-    const { extraInfo, cause } = error as Error & { extraInfo?: unknown; cause?: unknown };
+    // extraInfo comes from the DiagnosableErrorI contract (types.ts); cause is
+    // cast because it predates the lib's TS target (runtime since Node 16.9).
+    const { extraInfo, cause } = error as Error & DiagnosableErrorI & { cause?: unknown };
     if (extraInfo !== undefined) return { extraInfo };
     if (cause !== undefined) return { cause: describeError(cause).text };
     return undefined;

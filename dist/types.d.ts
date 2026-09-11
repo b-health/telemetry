@@ -1,6 +1,23 @@
 /** Severity levels. Internal to the library: call sites never pick CRITICAL/IMPORTANT directly — the policy does. */
 export type LogImportance = "CRITICAL" | "IMPORTANT" | "INFO" | "DEBUG";
 /**
+ * Contract for errors that carry structured diagnostics beyond message/stack.
+ *
+ * The split is deliberate: `message` stays STABLE per call site (it is the
+ * grouping key — Sentry issues and log-triage fingerprints match on it), and
+ * everything variable (provider response, Prisma code, described cause)
+ * travels in `extraInfo`. `errorDiagnostics` reads this contract and
+ * `reportTagged` prints it in the log line's `extra`.
+ *
+ * Consumers' error classes (e.g. B.Health's `ServerError`) should declare
+ * `implements DiagnosableErrorI` so a field rename breaks compilation there —
+ * not silently downgrade every log line back to `extra: null`.
+ */
+export interface DiagnosableErrorI {
+    /** Structured diagnostic payload. Serialized defensively into the log line's `extra`. */
+    extraInfo?: unknown;
+}
+/**
  * Structured payload for every log entry.
  *
  * Searchable dimensions (`hospitalId`, `scope`) become Sentry tags on capture;

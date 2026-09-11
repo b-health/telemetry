@@ -44,8 +44,8 @@ const errorDiagnostics = (error) => {
     try {
         if (!(error instanceof Error))
             return undefined;
-        // Structural cast: extraInfo is a B.Health wrapper convention, and cause
-        // predates the lib's TS lib target (it exists at runtime since Node 16.9).
+        // extraInfo comes from the DiagnosableErrorI contract (types.ts); cause is
+        // cast because it predates the lib's TS target (runtime since Node 16.9).
         const { extraInfo, cause } = error;
         if (extraInfo !== undefined)
             return { extraInfo };
